@@ -55,9 +55,10 @@ async def health_check():
 
 @app.get("/api/voices")
 async def get_voices():
-    """Trả về danh sách giọng đọc dựng sẵn và các thẻ cảm xúc hỗ trợ"""
+    """Trả về danh sách 25 giọng đọc chuẩn 3 miền và các thẻ cảm xúc hỗ trợ"""
+    engine = get_tts_engine()
     return {
-        "voices": TTSEngine.VOICES_METADATA,
+        "voices": engine.voices_list,
         "emotion_tags": TTSEngine.SUPPORTED_TAGS
     }
 

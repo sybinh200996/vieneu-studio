@@ -55,6 +55,64 @@ document.addEventListener("DOMContentLoaded", () => {
     let sessionHistory = [];
 
     // --- 1. HEALTH CHECK & LOAD VOICES ---
+    async function loadVoices() {
+        try {
+            const res = await fetch("/api/voices");
+            if (!res.ok) return;
+            const data = await res.json();
+            const voices = data.voices || [];
+            if (voices.length === 0) return;
+
+            // Nhóm theo Vùng Miền
+            const groups = {
+                "Miền Trung": [],
+                "Miền Nam": [],
+                "Miền Bắc": []
+            };
+
+            voices.forEach(v => {
+                const reg = v.region || "Miền Bắc";
+                if (!groups[reg]) groups[reg] = [];
+                groups[reg].push(v);
+            });
+
+            // Giữ lại giọng đang chọn nếu có
+            const currentSelected = voiceSelect.value || "Hải Đăng";
+            voiceSelect.innerHTML = "";
+
+            const regionIcons = {
+                "Miền Trung": "🌟 Miền Trung (Bình Định, Huế, Đà Nẵng...)",
+                "Miền Nam": "🌟 Miền Nam (Sài Gòn, Miền Tây...)",
+                "Miền Bắc": "🌟 Miền Bắc (Hà Nội, Vùng Đồng Bằng...)"
+            };
+
+            Object.keys(groups).forEach(reg => {
+                if (groups[reg].length === 0) return;
+                const optGroup = document.createElement("optgroup");
+                optGroup.label = regionIcons[reg] || reg;
+
+                groups[reg].forEach(v => {
+                    const opt = document.createElement("option");
+                    opt.value = v.id;
+                    opt.textContent = `${v.name} (${v.gender}) · ${v.style || v.description}`;
+                    if (v.id === currentSelected) {
+                        opt.selected = true;
+                    }
+                    optGroup.appendChild(opt);
+                });
+
+                voiceSelect.appendChild(optGroup);
+            });
+
+            const voiceCountBadge = document.getElementById("voiceCountBadge");
+            if (voiceCountBadge) {
+                voiceCountBadge.textContent = `${voices.length} giọng đọc (Bắc - Trung - Nam)`;
+            }
+        } catch (e) {
+            console.warn("Không thể tải danh sách voices động:", e);
+        }
+    }
+
     async function checkServerHealth() {
         try {
             const res = await fetch("/api/health");
@@ -65,7 +123,8 @@ document.addEventListener("DOMContentLoaded", () => {
             statusDot.classList.add("bg-emerald-400");
             
             if (data.engine && data.engine.status === "ready") {
-                statusText.textContent = `Sẵn sàng (${data.engine.model_name || 'VieNeu'})`;
+                const totalV = data.engine.total_voices ? ` • ${data.engine.total_voices} giọng` : '';
+                statusText.textContent = `Sẵn sàng (${data.engine.model_name || 'VieNeu'}${totalV})`;
             } else {
                 statusText.textContent = "Server hoạt động (Fallback/Dev)";
             }
@@ -76,6 +135,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     checkServerHealth();
+    loadVoices();
     setInterval(checkServerHealth, 30000); // Ping mỗi 30s
 
     // --- 2. TEXTAREA & CHARACTER COUNTER ---

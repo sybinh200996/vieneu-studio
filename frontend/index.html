@@ -159,14 +159,42 @@
                 <!-- Tab 1: Preset Voices Content -->
                 <div id="tabPresetContent" class="space-y-4">
                     <div>
-                        <label for="voiceSelect" class="block text-xs font-semibold text-slate-300 mb-2">Chọn nhân vật & vùng miền</label>
+                        <div class="flex items-center justify-between mb-2">
+                            <label for="voiceSelect" class="text-xs font-semibold text-slate-300">Chọn nhân vật & vùng miền</label>
+                            <span id="voiceCountBadge" class="text-[11px] font-mono text-cyan-400">25 giọng đọc (Bắc - Trung - Nam)</span>
+                        </div>
                         <select id="voiceSelect" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-200 text-sm focus:border-indigo-500 focus:outline-none">
-                            <option value="Hải Đăng">Hải Đăng (Nam - Miền Bắc) - Trầm ấm, truyền cảm</option>
-                            <option value="Ngọc">Ngọc (Nữ - Miền Bắc) - Thanh thoát, dịu dàng</option>
-                            <option value="Bình">Bình (Nam - Miền Trung) - Dứt khoát, mộc mạc</option>
-                            <option value="Đoan">Đoan (Nữ - Miền Trung) - Ngọt ngào, sâu lắng</option>
-                            <option value="Tuyên">Tuyên (Nam - Miền Nam) - Hào sảng, hiện đại</option>
-                            <option value="Mai">Mai (Nữ - Miền Nam) - Trong trẻo, tươi sáng</option>
+                            <optgroup label="🌟 Miền Trung (Bình Định, Huế, Đà Nẵng...)">
+                                <option value="Quang Sơn">Quang Sơn (Nam) · Tự nhiên, mộc mạc</option>
+                                <option value="Ngọc Trân">Ngọc Trân (Nữ) · Ngọt ngào, sâu lắng</option>
+                            </optgroup>
+                            <optgroup label="🌟 Miền Nam (Sài Gòn, Miền Tây...)">
+                                <option value="Thùy Dung">Thùy Dung (Nữ) · Tin tức, chuẩn mực</option>
+                                <option value="Thái Sơn">Thái Sơn (Nam) · Kể chuyện, trầm ấm</option>
+                                <option value="Thục Đoan">Thục Đoan (Nữ) · Kể chuyện, nhẹ nhàng</option>
+                                <option value="Minh Triết">Minh Triết (Nam) · Tin tức, hiện đại</option>
+                                <option value="Mỹ Duyên">Mỹ Duyên (Nữ) · Đọc truyện, cuốn hút</option>
+                                <option value="Đức Trí">Đức Trí (Nam) · Đọc truyện, truyền cảm</option>
+                                <option value="Kim Thanh">Kim Thanh (Nữ) · Đọc truyện, mượt mà</option>
+                                <option value="Adam">Adam (Nam) · Tự nhiên, phóng khoáng</option>
+                            </optgroup>
+                            <optgroup label="🌟 Miền Bắc (Hà Nội, Vùng Đồng Bằng...)">
+                                <option value="Hải Đăng" selected>Hải Đăng (Nam) · Trầm ấm, truyền cảm (Mặc định)</option>
+                                <option value="Trúc Ly">Trúc Ly (Nữ) · Thanh thoát, tự nhiên</option>
+                                <option value="Thiện Minh">Thiện Minh (Nam) · Kể chuyện, sâu sắc</option>
+                                <option value="Mai Anh">Mai Anh (Nữ) · Tin tức, rõ ràng</option>
+                                <option value="Ngọc Huyền">Ngọc Huyền (Nữ) · Tự nhiên, nhẹ nhàng</option>
+                                <option value="Minh Đức">Minh Đức (Nam) · Tin tức, chuẩn đài</option>
+                                <option value="Phạm Tuyên">Phạm Tuyên (Nam) · Tự nhiên, đĩnh đạc</option>
+                                <option value="Thanh Bình">Thanh Bình (Nam) · Kể chuyện, đầm ấm</option>
+                                <option value="Xuân Vĩnh">Xuân Vĩnh (Nam) · Tự nhiên, trẻ trung</option>
+                                <option value="Ngọc Linh">Ngọc Linh (Nữ) · Kể chuyện, ấm áp</option>
+                                <option value="Đoan Trang">Đoan Trang (Nữ) · Tự nhiên, duyên dáng</option>
+                                <option value="Quỳnh Anh">Quỳnh Anh (Nữ) · Đọc truyện, dịu dàng</option>
+                                <option value="Quốc Tuấn">Quốc Tuấn (Nam) · Tự nhiên, khỏe khoắn</option>
+                                <option value="Thiền Tâm Đức">Thiền Tâm Đức (Nam) · Kể chuyện Phật giáo, tĩnh tâm</option>
+                                <option value="Adam bựa">Adam bựa (Nam) · Hài hước, tếu táo</option>
+                            </optgroup>
                         </select>
                     </div>
                 </div>
