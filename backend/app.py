@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from starlette.concurrency import run_in_threadpool
 from backend.tts_engine import get_tts_engine, TTSEngine, CPUQueueFullError
 from backend.auth import (
     verify_admin_login,
@@ -140,7 +141,8 @@ async def synthesize_speech(
                     detail="File âm thanh mẫu vượt quá 25MB."
                 )
 
-        wav_buffer = engine.infer(
+        wav_buffer = await run_in_threadpool(
+            engine.infer,
             text=clean_text,
             voice=voice,
             ref_audio_path=temp_ref_path,
