@@ -1,6 +1,7 @@
 import io
 import os
 import asyncio
+import concurrent.futures
 import subprocess
 import tempfile
 import logging
@@ -52,12 +53,18 @@ class EdgeTTSEngine:
         if not clean_text:
             raise ValueError("Văn bản tổng hợp không được để trống.")
 
-        # Lấy MP3 bytes từ Edge-TTS
+        # Lấy MP3 bytes từ Edge-TTS trong Thread riêng biệt để tránh xung đột event loop FastAPI
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            mp3_bytes = loop.run_until_complete(self._synthesize_mp3_async(clean_text, voice))
-            loop.close()
+            def runner():
+                thread_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(thread_loop)
+                try:
+                    return thread_loop.run_until_complete(self._synthesize_mp3_async(clean_text, voice))
+                finally:
+                    thread_loop.close()
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                mp3_bytes = executor.submit(runner).result(timeout=60)
         except Exception as e:
             logger.error(f"Lỗi khi gọi Edge-TTS: {e}", exc_info=True)
             raise RuntimeError(f"Edge-TTS Error: {e}")
