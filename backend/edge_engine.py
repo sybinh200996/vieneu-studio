@@ -44,12 +44,38 @@ class EdgeTTSEngine:
                 audio_data.extend(chunk["data"])
         return bytes(audio_data)
 
+    @staticmethod
+    def _normalize_text_for_edge(text: str) -> str:
+        """
+        Chuẩn hóa văn bản tương thích ngữ âm cho Microsoft Edge-TTS.
+        Khắc phục lỗi G2P tokenizer của Azure Speech đối với các âm tiết s+y dài.
+        """
+        import re
+        norm_map = {
+            r'\bSỹ\b': 'Sĩ',
+            r'\bsỹ\b': 'sĩ',
+            r'\bSy\b': 'Si',
+            r'\bsy\b': 'si',
+            r'\bSý\b': 'Sí',
+            r'\bsý\b': 'sí',
+            r'\bSỳ\b': 'Sì',
+            r'\bsỳ\b': 'sì',
+            r'\bSỷ\b': 'Sỉ',
+            r'\bsỷ\b': 'sỉ',
+            r'\bSỵ\b': 'Sị',
+            r'\bsỵ\b': 'sị',
+        }
+        res = text
+        for pat, rep in norm_map.items():
+            res = re.sub(pat, rep, res)
+        return res
+
     def synthesize(self, text: str, voice: str = "vi-VN-HoaiMyNeural") -> io.BytesIO:
         """
         Tổng hợp giọng nói qua Edge Neural Cloud và chuyển đổi sang WAV 48kHz.
         Không tốn RAM trên VPS CPU, tốc độ chỉ ~0.5s - 1s.
         """
-        clean_text = text.strip()
+        clean_text = self._normalize_text_for_edge(text.strip())
         if not clean_text:
             raise ValueError("Văn bản tổng hợp không được để trống.")
 
