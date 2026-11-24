@@ -37,12 +37,21 @@ class EdgeTTSEngine:
 
     async def _synthesize_mp3_async(self, text: str, voice: str) -> bytes:
         import edge_tts
-        communicate = edge_tts.Communicate(text=text, voice=voice)
-        audio_data = bytearray()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data.extend(chunk["data"])
-        return bytes(audio_data)
+        last_error = None
+        for attempt in range(3):
+            try:
+                communicate = edge_tts.Communicate(text=text, voice=voice)
+                audio_data = bytearray()
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        audio_data.extend(chunk["data"])
+                if audio_data:
+                    return bytes(audio_data)
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Edge-TTS attempt {attempt + 1} gặp lỗi: {e}. Thử lại sau 0.4s...")
+                await asyncio.sleep(0.4)
+        raise RuntimeError(f"Edge-TTS thất bại sau 3 lần thử: {last_error}")
 
     @staticmethod
     def _normalize_text_for_edge(text: str) -> str:
