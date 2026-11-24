@@ -1,5 +1,7 @@
 import io
 import os
+import re
+import time
 import json
 import logging
 import threading
@@ -12,6 +14,10 @@ from backend.voicepack_engine import get_voicepack_engine
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("TTSEngine")
+
+class CPUQueueFullError(Exception):
+    """Bắn ra khi số lượng request TTS trên CPU vượt quá giới hạn BoundedSemaphore (tối đa 4 request chờ)"""
+    pass
 
 try:
     import numpy as np
@@ -161,6 +167,8 @@ class TTSEngine:
         self.device = os.getenv("VIENEU_DEVICE", "cpu")
         self.sample_rate = 48000
         self.infer_lock = threading.Lock()
+        # Chốt chặn hàng đợi CPU: Tối đa 4 request chờ đồng thời trên 2 vCPU
+        self.cpu_semaphore = threading.BoundedSemaphore(4)
         self.tts = None
         self.is_loaded = False
         self.error_message = None
@@ -303,71 +311,171 @@ class TTSEngine:
         logger.warning(f"Không tìm thấy giọng '{raw_voice}', sử dụng giọng mặc định 'Hải Đăng'")
         return {"id": "Hải Đăng", "engine": "vieneu", "name": "Hải Đăng"}
 
+    @staticmethod
+    def chunk_text(text: str, max_chars: int = 320) -> List[str]:
+        """
+        Chia nhỏ văn bản dài thành các đoạn ngắn (~200 - 320 ký tự) theo ranh giới câu tự nhiên.
+        Đảm bảo không cắt ngang từ ngữ, giúp giữ RAM ổn định và giải phóng CPU tuần tự.
+        """
+        clean = text.strip()
+        if len(clean) <= max_chars:
+            return [clean]
+
+        raw_sentences = re.split(r'([.!?;\n]+)', clean)
+        sentences = []
+        for i in range(0, len(raw_sentences) - 1, 2):
+            s = (raw_sentences[i] + raw_sentences[i+1]).strip()
+            if s:
+                sentences.append(s)
+        if len(raw_sentences) % 2 == 1 and raw_sentences[-1].strip():
+            sentences.append(raw_sentences[-1].strip())
+
+        chunks = []
+        current_chunk = ""
+
+        for sentence in sentences:
+            if len(sentence) > max_chars:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = ""
+                sub_parts = re.split(r'([,，]+)', sentence)
+                sub_sentences = []
+                for j in range(0, len(sub_parts) - 1, 2):
+                    sp = (sub_parts[j] + sub_parts[j+1]).strip()
+                    if sp:
+                        sub_sentences.append(sp)
+                if len(sub_parts) % 2 == 1 and sub_parts[-1].strip():
+                    sub_sentences.append(sub_parts[-1].strip())
+
+                for sub in sub_sentences:
+                    if len(sub) > max_chars:
+                        words = sub.split()
+                        w_chunk = ""
+                        for w in words:
+                            if len(w_chunk) + len(w) + 1 <= max_chars:
+                                w_chunk = f"{w_chunk} {w}".strip()
+                            else:
+                                if w_chunk:
+                                    chunks.append(w_chunk)
+                                w_chunk = w
+                        if w_chunk:
+                            chunks.append(w_chunk)
+                    else:
+                        if len(current_chunk) + len(sub) + 1 <= max_chars:
+                            current_chunk = f"{current_chunk} {sub}".strip()
+                        else:
+                            if current_chunk:
+                                chunks.append(current_chunk.strip())
+                            current_chunk = sub
+            else:
+                if len(current_chunk) + len(sentence) + 1 <= max_chars:
+                    current_chunk = f"{current_chunk} {sentence}".strip()
+                else:
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = sentence
+
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+
+        return [c for c in chunks if c.strip()]
+
+    def _infer_cpu_chunks(self, chunks: List[str], voice: Optional[str] = None, ref_audio: Optional[str] = None, denoise: bool = True) -> io.BytesIO:
+        """
+        Thực hiện suy luận tuần tự từng chunk trên CPU, nhả CPU và ghép các mảng numpy lại.
+        Giúp đỉnh RAM phẳng lỳ và CPU không bị khóa cứng khi lồng tiếng văn bản dài.
+        """
+        if not self.is_ready():
+            return self._generate_fallback_audio(" ".join(chunks))
+
+        audio_parts = []
+        pause_samples = int(self.sample_rate * 0.15)
+        silence = np.zeros(pause_samples, dtype=np.float32) if np is not None else None
+
+        for idx, chunk in enumerate(chunks):
+            if len(chunks) > 1:
+                logger.info(f"Đang tổng hợp chunk {idx+1}/{len(chunks)} ({len(chunk)} ký tự)...")
+            
+            if ref_audio:
+                out = self.tts.infer(text=chunk, ref_audio=ref_audio, denoise=denoise)
+            else:
+                out = self.tts.infer(text=chunk, voice=voice, denoise=denoise)
+
+            if np is not None and isinstance(out, np.ndarray):
+                audio_parts.append(out)
+            elif np is not None and isinstance(out, tuple) and len(out) >= 1:
+                audio_parts.append(out[0])
+            else:
+                wav_io = self._convert_to_wav_io(out)
+                if sf is not None:
+                    data, _ = sf.read(wav_io)
+                    audio_parts.append(data)
+
+            if idx < len(chunks) - 1 and silence is not None:
+                audio_parts.append(silence)
+                time.sleep(0.01)
+
+        if audio_parts and np is not None:
+            combined = np.concatenate(audio_parts)
+            return self._convert_to_wav_io(combined)
+        elif audio_parts:
+            return self._convert_to_wav_io(audio_parts[0])
+        else:
+            return self._generate_fallback_audio(" ".join(chunks))
+
     def infer(self, text: str, voice: Optional[str] = "Hải Đăng", ref_audio_path: Optional[str] = None, denoise: bool = True) -> io.BytesIO:
         cleaned_text = text.strip()
         if not cleaned_text:
             raise ValueError("Văn bản tổng hợp không được để trống.")
 
-        # TRƯỜNG HỢP 1: Người dùng upload / ghi âm file mẫu (Custom Voice Cloning trực tiếp)
-        if ref_audio_path and os.path.exists(ref_audio_path):
-            with self.infer_lock:
-                if not self.is_ready():
-                    return self._generate_fallback_audio(cleaned_text)
-                logger.info(f"Bắt đầu Voice Cloning từ file mẫu người dùng: {ref_audio_path} (Denoise={denoise})")
-                audio_output = self.tts.infer(
-                    text=cleaned_text,
-                    ref_audio=ref_audio_path,
-                    denoise=denoise
-                )
-                return self._convert_to_wav_io(audio_output)
-
-        # TRƯỜNG HỢP 2: Sử dụng giọng có sẵn qua Multi-Engine Router
+        # Phân loại engine để điều hướng tối ưu tài nguyên
         voice_info = self.resolve_voice_info(voice)
         engine_type = voice_info.get("engine", "vieneu")
         voice_id = voice_info.get("id", "Hải Đăng")
 
-        # --- A. XỬ LÝ QUA EDGE-TTS (Tốc độ cao, 0MB RAM) ---
-        if engine_type == "edge":
+        # --- A. XỬ LÝ QUA EDGE-TTS (Tốc độ cao, Cloud 0MB RAM, không dùng CPU semaphore) ---
+        if engine_type == "edge" and not (ref_audio_path and os.path.exists(ref_audio_path)):
             logger.info(f"Định tuyến tới Edge-TTS Engine: '{voice_id}' (Voice: {voice_info.get('name')})")
             edge_engine = get_edge_engine()
             return edge_engine.synthesize(text=cleaned_text, voice=voice_id)
 
-        # --- B. XỬ LÝ QUA CUSTOM VOICEPACKS (VieNeu Prompt Audio) ---
-        if engine_type == "voicepack":
-            vp_engine = get_voicepack_engine()
-            sample_path = vp_engine.get_sample_path(voice_id)
-            if sample_path and os.path.exists(sample_path):
-                logger.info(f"Định tuyến tới Voicepack: '{voice_info.get('name')}' qua mẫu: {sample_path}")
+        # --- B. CÁC TÁC VỤ CPU (VieNeu / Voicepack / Custom Voice Cloning) ---
+        # Kiểm tra chốt chặn hàng đợi CPU: Tối đa 4 request chờ đồng thời trên 2 vCPU
+        if not self.cpu_semaphore.acquire(blocking=False):
+            logger.warning("Từ chối request: Hàng đợi CPU đã đạt ngưỡng tối đa 4 request.")
+            raise CPUQueueFullError("Máy chủ đang bận xử lý tối đa 4 tác vụ âm thanh trên CPU. Vui lòng thử lại sau.")
+
+        try:
+            # Tự động chia nhỏ văn bản dài (>350 ký tự) thành các chunk ~250-320 ký tự
+            chunks = self.chunk_text(cleaned_text, max_chars=320) if len(cleaned_text) > 350 else [cleaned_text]
+            if len(chunks) > 1:
+                logger.info(f"Văn bản dài ({len(cleaned_text)} ký tự), tự động chia thành {len(chunks)} chunks để giữ RAM phẳng.")
+
+            # TRƯỜNG HỢP 1: Người dùng upload / ghi âm file mẫu (Custom Voice Cloning trực tiếp)
+            if ref_audio_path and os.path.exists(ref_audio_path):
                 with self.infer_lock:
-                    if not self.is_ready():
-                        return self._generate_fallback_audio(cleaned_text)
-                    audio_output = self.tts.infer(
-                        text=cleaned_text,
-                        ref_audio=sample_path,
-                        denoise=True
-                    )
-                    return self._convert_to_wav_io(audio_output)
-            else:
-                logger.warning(f"Không tìm thấy file mẫu cho voicepack '{voice_id}', fallback về Hải Đăng")
-                voice_id = "Hải Đăng"
+                    logger.info(f"Bắt đầu Voice Cloning từ file mẫu người dùng: {ref_audio_path} (Denoise={denoise})")
+                    return self._infer_cpu_chunks(chunks, ref_audio=ref_audio_path, denoise=denoise)
 
-        # --- C. XỬ LÝ QUA VIENEU PRESETS (25 giọng chuẩn) ---
-        with self.infer_lock:
-            if not self.is_ready():
-                logger.warning("Mô hình VieNeu chưa sẵn sàng, kích hoạt fallback sóng âm...")
-                return self._generate_fallback_audio(cleaned_text)
+            # TRƯỜNG HỢP 2: Sử dụng Custom Voicepacks
+            if engine_type == "voicepack":
+                vp_engine = get_voicepack_engine()
+                sample_path = vp_engine.get_sample_path(voice_id)
+                if sample_path and os.path.exists(sample_path):
+                    logger.info(f"Định tuyến tới Voicepack: '{voice_info.get('name')}' qua mẫu: {sample_path}")
+                    with self.infer_lock:
+                        return self._infer_cpu_chunks(chunks, ref_audio=sample_path, denoise=True)
+                else:
+                    logger.warning(f"Không tìm thấy file mẫu cho voicepack '{voice_id}', fallback về Hải Đăng")
+                    voice_id = "Hải Đăng"
 
-            try:
+            # TRƯỜNG HỢP 3: VieNeu Presets (25 giọng chuẩn)
+            with self.infer_lock:
                 logger.info(f"Định tuyến tới VieNeu Engine: '{voice_id}' (Input: '{voice}')")
-                audio_output = self.tts.infer(
-                    text=cleaned_text,
-                    voice=voice_id,
-                    denoise=denoise
-                )
-                return self._convert_to_wav_io(audio_output)
-            except Exception as e:
-                logger.error(f"Lỗi suy luận VieNeu TTS: {str(e)}", exc_info=True)
-                raise RuntimeError(f"Lỗi suy luận VieNeu TTS: {str(e)}")
+                return self._infer_cpu_chunks(chunks, voice=voice_id, denoise=denoise)
+
+        finally:
+            self.cpu_semaphore.release()
 
     def _convert_to_wav_io(self, audio_output: Any) -> io.BytesIO:
         buffer = io.BytesIO()

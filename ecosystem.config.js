@@ -10,8 +10,8 @@ module.exports = {
       interpreter: "none",
       autorestart: true,
       watch: false,
-      // Tự động khởi động lại nếu tiến trình ngốn quá 2GB RAM
-      max_memory_restart: "2G",
+      // Tự động khởi động lại nếu tiến trình ngốn quá 2200MB RAM (chốt chặn an toàn cho VPS 4GB)
+      max_memory_restart: "2200M",
       env: {
         NODE_ENV: "production",
         PYTHONUNBUFFERED: "1",

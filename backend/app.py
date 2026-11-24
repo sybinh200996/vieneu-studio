@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from backend.tts_engine import get_tts_engine, TTSEngine
+from backend.tts_engine import get_tts_engine, TTSEngine, CPUQueueFullError
 from backend.auth import (
     verify_admin_login,
     verify_admin_token,
@@ -156,6 +156,13 @@ async def synthesize_speech(
             }
         )
 
+    except CPUQueueFullError as e:
+        logger.warning(f"Chống tràn hàng đợi CPU (429 Too Many Requests): {e}")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(e),
+            headers={"Retry-After": "2"}
+        )
     except HTTPException:
         raise
     except Exception as e:
