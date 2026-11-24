@@ -63,35 +63,44 @@ document.addEventListener("DOMContentLoaded", () => {
             const voices = data.voices || [];
             if (voices.length === 0) return;
 
-            // Nhóm theo Vùng Miền
+            // Nhóm theo Loại Engine & Vùng Miền
             const groups = {
-                "Miền Trung": [],
-                "Miền Nam": [],
-                "Miền Bắc": []
+                "edge": { label: "⚡ Giọng Siêu Tốc (Edge Neural - 0MB RAM VPS)", list: [] },
+                "voicepack": { label: "🎙️ Voicepack Thu Chuẩn (Mẫu Phòng Thu)", list: [] },
+                "trung": { label: "🌟 Miền Trung (VieNeu-TTS)", list: [] },
+                "nam": { label: "🌟 Miền Nam (VieNeu-TTS)", list: [] },
+                "bac": { label: "🌟 Miền Bắc (VieNeu-TTS)", list: [] }
             };
 
             voices.forEach(v => {
+                const eng = v.engine || "vieneu";
                 const reg = v.region || "Miền Bắc";
-                if (!groups[reg]) groups[reg] = [];
-                groups[reg].push(v);
+
+                if (eng === "edge") {
+                    groups["edge"].list.push(v);
+                } else if (eng === "voicepack") {
+                    groups["voicepack"].list.push(v);
+                } else if (reg === "Miền Trung") {
+                    groups["trung"].list.push(v);
+                } else if (reg === "Miền Nam") {
+                    groups["nam"].list.push(v);
+                } else {
+                    groups["bac"].list.push(v);
+                }
             });
 
             // Giữ lại giọng đang chọn nếu có
             const currentSelected = voiceSelect.value || "Hải Đăng";
             voiceSelect.innerHTML = "";
 
-            const regionIcons = {
-                "Miền Trung": "🌟 Miền Trung (Bình Định, Huế, Đà Nẵng...)",
-                "Miền Nam": "🌟 Miền Nam (Sài Gòn, Miền Tây...)",
-                "Miền Bắc": "🌟 Miền Bắc (Hà Nội, Vùng Đồng Bằng...)"
-            };
+            Object.keys(groups).forEach(k => {
+                const grp = groups[k];
+                if (grp.list.length === 0) return;
 
-            Object.keys(groups).forEach(reg => {
-                if (groups[reg].length === 0) return;
                 const optGroup = document.createElement("optgroup");
-                optGroup.label = regionIcons[reg] || reg;
+                optGroup.label = grp.label;
 
-                groups[reg].forEach(v => {
+                grp.list.forEach(v => {
                     const opt = document.createElement("option");
                     opt.value = v.id;
                     opt.textContent = `${v.name} (${v.gender}) · ${v.style || v.description}`;
@@ -106,7 +115,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const voiceCountBadge = document.getElementById("voiceCountBadge");
             if (voiceCountBadge) {
-                voiceCountBadge.textContent = `${voices.length} giọng đọc (Bắc - Trung - Nam)`;
+                voiceCountBadge.textContent = `${voices.length} giọng đọc đa Engine`;
             }
         } catch (e) {
             console.warn("Không thể tải danh sách voices động:", e);

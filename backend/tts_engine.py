@@ -6,6 +6,9 @@ import threading
 import tempfile
 from typing import Optional, List, Dict, Any
 
+from backend.edge_engine import get_edge_engine, EDGE_VOICES_METADATA
+from backend.voicepack_engine import get_voicepack_engine
+
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("TTSEngine")
@@ -24,42 +27,79 @@ class TTSEngine:
     _instance: Optional["TTSEngine"] = None
     _init_lock = threading.Lock()
 
-    # Danh mục 25 giọng đọc chuẩn mực của VieNeu-TTS v3 Turbo phân nhóm 3 miền
+    # Danh mục 25 giọng đọc chuẩn mực nội bộ của VieNeu-TTS v3 Turbo
     FALLBACK_VOICES_METADATA = [
         # --- MIỀN TRUNG ---
-        {"id": "Quang Sơn", "name": "Quang Sơn", "gender": "Nam", "region": "Miền Trung", "description": "Nam · Miền Trung · Tự nhiên, mộc mạc", "style": "Tự nhiên"},
-        {"id": "Ngọc Trân", "name": "Ngọc Trân", "gender": "Nữ", "region": "Miền Trung", "description": "Nữ · Miền Trung · Ngọt ngào, sâu lắng", "style": "Tự nhiên"},
+        {"id": "Quang Sơn", "name": "Quang Sơn", "gender": "Nam", "region": "Miền Trung", "description": "Nam · Miền Trung · Tự nhiên, mộc mạc", "style": "Tự nhiên", "engine": "vieneu"},
+        {"id": "Ngọc Trân", "name": "Ngọc Trân", "gender": "Nữ", "region": "Miền Trung", "description": "Nữ · Miền Trung · Ngọt ngào, sâu lắng", "style": "Tự nhiên", "engine": "vieneu"},
 
         # --- MIỀN NAM ---
-        {"id": "Thùy Dung", "name": "Thùy Dung", "gender": "Nữ", "region": "Miền Nam", "description": "Nữ · Miền Nam · Tin tức, chuẩn mực", "style": "Tin tức"},
-        {"id": "Thái Sơn", "name": "Thái Sơn", "gender": "Nam", "region": "Miền Nam", "description": "Nam · Miền Nam · Kể chuyện, trầm ấm", "style": "Kể chuyện"},
-        {"id": "Thục Đoan", "name": "Thục Đoan", "gender": "Nữ", "region": "Miền Nam", "description": "Nữ · Miền Nam · Kể chuyện, nhẹ nhàng", "style": "Kể chuyện"},
-        {"id": "Minh Triết", "name": "Minh Triết", "gender": "Nam", "region": "Miền Nam", "description": "Nam · Miền Nam · Tin tức, hiện đại", "style": "Tin tức"},
-        {"id": "Mỹ Duyên", "name": "Mỹ Duyên", "gender": "Nữ", "region": "Miền Nam", "description": "Nữ · Miền Nam · Đọc truyện, cuốn hút", "style": "Đọc truyện"},
-        {"id": "Đức Trí", "name": "Đức Trí", "gender": "Nam", "region": "Miền Nam", "description": "Nam · Miền Nam · Đọc truyện, truyền cảm", "style": "Đọc truyện"},
-        {"id": "Kim Thanh", "name": "Kim Thanh", "gender": "Nữ", "region": "Miền Nam", "description": "Nữ · Miền Nam · Đọc truyện, mượt mà", "style": "Đọc truyện"},
-        {"id": "Adam", "name": "Adam", "gender": "Nam", "region": "Miền Nam", "description": "Nam · Miền Nam · Giọng đọc tự nhiên, phóng khoáng", "style": "Tự nhiên"},
+        {"id": "Thùy Dung", "name": "Thùy Dung", "gender": "Nữ", "region": "Miền Nam", "description": "Nữ · Miền Nam · Tin tức, chuẩn mực", "style": "Tin tức", "engine": "vieneu"},
+        {"id": "Thái Sơn", "name": "Thái Sơn", "gender": "Nam", "region": "Miền Nam", "description": "Nam · Miền Nam · Kể chuyện, trầm ấm", "style": "Kể chuyện", "engine": "vieneu"},
+        {"id": "Thục Đoan", "name": "Thục Đoan", "gender": "Nữ", "region": "Miền Nam", "description": "Nữ · Miền Nam · Kể chuyện, nhẹ nhàng", "style": "Kể chuyện", "engine": "vieneu"},
+        {"id": "Minh Triết", "name": "Minh Triết", "gender": "Nam", "region": "Miền Nam", "description": "Nam · Miền Nam · Tin tức, hiện đại", "style": "Tin tức", "engine": "vieneu"},
+        {"id": "Mỹ Duyên", "name": "Mỹ Duyên", "gender": "Nữ", "region": "Miền Nam", "description": "Nữ · Miền Nam · Đọc truyện, cuốn hút", "style": "Đọc truyện", "engine": "vieneu"},
+        {"id": "Đức Trí", "name": "Đức Trí", "gender": "Nam", "region": "Miền Nam", "description": "Nam · Miền Nam · Đọc truyện, truyền cảm", "style": "Đọc truyện", "engine": "vieneu"},
+        {"id": "Kim Thanh", "name": "Kim Thanh", "gender": "Nữ", "region": "Miền Nam", "description": "Nữ · Miền Nam · Đọc truyện, mượt mà", "style": "Đọc truyện", "engine": "vieneu"},
+        {"id": "Adam", "name": "Adam", "gender": "Nam", "region": "Miền Nam", "description": "Nam · Miền Nam · Giọng đọc tự nhiên, phóng khoáng", "style": "Tự nhiên", "engine": "vieneu"},
 
         # --- MIỀN BẮC ---
-        {"id": "Hải Đăng", "name": "Hải Đăng", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Trầm ấm, truyền cảm (Mặc định)", "style": "Tự nhiên"},
-        {"id": "Trúc Ly", "name": "Trúc Ly", "gender": "Nữ", "region": "Miền Bắc", "description": "Nữ · Miền Bắc · Thanh thoát, tự nhiên", "style": "Tự nhiên"},
-        {"id": "Thiện Minh", "name": "Thiện Minh", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Kể chuyện, sâu sắc", "style": "Kể chuyện"},
-        {"id": "Mai Anh", "name": "Mai Anh", "gender": "Nữ", "region": "Miền Bắc", "description": "Nữ · Miền Bắc · Tin tức, rõ ràng", "style": "Tin tức"},
-        {"id": "Ngọc Huyền", "name": "Ngọc Huyền", "gender": "Nữ", "region": "Miền Bắc", "description": "Nữ · Miền Bắc · Tự nhiên, nhẹ nhàng", "style": "Tự nhiên"},
-        {"id": "Minh Đức", "name": "Minh Đức", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Tin tức, chuẩn đài", "style": "Tin tức"},
-        {"id": "Phạm Tuyên", "name": "Phạm Tuyên", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Tự nhiên, đĩnh đạc", "style": "Tự nhiên"},
-        {"id": "Thanh Bình", "name": "Thanh Bình", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Kể chuyện, đầm ấm", "style": "Kể chuyện"},
-        {"id": "Xuân Vĩnh", "name": "Xuân Vĩnh", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Tự nhiên, trẻ trung", "style": "Tự nhiên"},
-        {"id": "Ngọc Linh", "name": "Ngọc Linh", "gender": "Nữ", "region": "Miền Bắc", "description": "Nữ · Miền Bắc · Kể chuyện, ấm áp", "style": "Kể chuyện"},
-        {"id": "Đoan Trang", "name": "Đoan Trang", "gender": "Nữ", "region": "Miền Bắc", "description": "Nữ · Miền Bắc · Tự nhiên, duyên dáng", "style": "Tự nhiên"},
-        {"id": "Quỳnh Anh", "name": "Quỳnh Anh", "gender": "Nữ", "region": "Miền Bắc", "description": "Nữ · Miền Bắc · Đọc truyện, dịu dàng", "style": "Đọc truyện"},
-        {"id": "Quốc Tuấn", "name": "Quốc Tuấn", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Tự nhiên, khỏe khoắn", "style": "Tự nhiên"},
-        {"id": "Thiền Tâm Đức", "name": "Thiền Tâm Đức", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Kể chuyện Phật giáo, tĩnh tâm", "style": "Kể chuyện"},
-        {"id": "Adam bựa", "name": "Adam bựa", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Hài hước, tếu táo", "style": "Tự nhiên"}
+        {"id": "Hải Đăng", "name": "Hải Đăng", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Trầm ấm, truyền cảm (Mặc định)", "style": "Tự nhiên", "engine": "vieneu"},
+        {"id": "Trúc Ly", "name": "Trúc Ly", "gender": "Nữ", "region": "Miền Bắc", "description": "Nữ · Miền Bắc · Thanh thoát, tự nhiên", "style": "Tự nhiên", "engine": "vieneu"},
+        {"id": "Thiện Minh", "name": "Thiện Minh", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Kể chuyện, sâu sắc", "style": "Kể chuyện", "engine": "vieneu"},
+        {"id": "Mai Anh", "name": "Mai Anh", "gender": "Nữ", "region": "Miền Bắc", "description": "Nữ · Miền Bắc · Tin tức, rõ ràng", "style": "Tin tức", "engine": "vieneu"},
+        {"id": "Ngọc Huyền", "name": "Ngọc Huyền", "gender": "Nữ", "region": "Miền Bắc", "description": "Nữ · Miền Bắc · Tự nhiên, nhẹ nhàng", "style": "Tự nhiên", "engine": "vieneu"},
+        {"id": "Minh Đức", "name": "Minh Đức", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Tin tức, chuẩn đài", "style": "Tin tức", "engine": "vieneu"},
+        {"id": "Phạm Tuyên", "name": "Phạm Tuyên", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Tự nhiên, đĩnh đạc", "style": "Tự nhiên", "engine": "vieneu"},
+        {"id": "Thanh Bình", "name": "Thanh Bình", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Kể chuyện, đầm ấm", "style": "Kể chuyện", "engine": "vieneu"},
+        {"id": "Xuân Vĩnh", "name": "Xuân Vĩnh", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Tự nhiên, trẻ trung", "style": "Tự nhiên", "engine": "vieneu"},
+        {"id": "Ngọc Linh", "name": "Ngọc Linh", "gender": "Nữ", "region": "Miền Bắc", "description": "Nữ · Miền Bắc · Kể chuyện, ấm áp", "style": "Kể chuyện", "engine": "vieneu"},
+        {"id": "Đoan Trang", "name": "Đoan Trang", "gender": "Nữ", "region": "Miền Bắc", "description": "Nữ · Miền Bắc · Tự nhiên, duyên dáng", "style": "Tự nhiên", "engine": "vieneu"},
+        {"id": "Quỳnh Anh", "name": "Quỳnh Anh", "gender": "Nữ", "region": "Miền Bắc", "description": "Nữ · Miền Bắc · Đọc truyện, dịu dàng", "style": "Đọc truyện", "engine": "vieneu"},
+        {"id": "Quốc Tuấn", "name": "Quốc Tuấn", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Tự nhiên, khỏe khoắn", "style": "Tự nhiên", "engine": "vieneu"},
+        {"id": "Thiền Tâm Đức", "name": "Thiền Tâm Đức", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Kể chuyện Phật giáo, tĩnh tâm", "style": "Kể chuyện", "engine": "vieneu"},
+        {"id": "Adam bựa", "name": "Adam bựa", "gender": "Nam", "region": "Miền Bắc", "description": "Nam · Miền Bắc · Hài hước, tếu táo", "style": "Tự nhiên", "engine": "vieneu"}
     ]
 
     # Alias mapping thông minh để bắt các tên rút gọn người dùng gõ
     VOICE_ALIASES = {
+        # Edge Neural
+        "hoài my": "vi-VN-HoaiMyNeural",
+        "hoaimy": "vi-VN-HoaiMyNeural",
+        "vi-vn-hoaimyneural": "vi-VN-HoaiMyNeural",
+        "nam minh": "vi-VN-NamMinhNeural",
+        "namminh": "vi-VN-NamMinhNeural",
+        "vi-vn-namminhneural": "vi-VN-NamMinhNeural",
+
+        # Custom Voicepacks
+        "mc thời sự nam": "VP_MC_Nam",
+        "mc vtv nam": "VP_MC_Nam",
+        "mc nam": "VP_MC_Nam",
+        "vp_mc_nam": "VP_MC_Nam",
+
+        "mc thời sự nữ": "VP_MC_Nu",
+        "mc vtv nữ": "VP_MC_Nu",
+        "mc nữ": "VP_MC_Nu",
+        "vp_mc_nu": "VP_MC_Nu",
+
+        "kể chuyện đêm": "VP_KeChuyenDem",
+        "kể chuyện đêm khuya": "VP_KeChuyenDem",
+        "chuyện đêm": "VP_KeChuyenDem",
+        "vp_kechuyendem": "VP_KeChuyenDem",
+
+        "nữ huế": "VP_NuHue",
+        "huế": "VP_NuHue",
+        "vp_nuhue": "VP_NuHue",
+
+        "nữ miền tây": "VP_NuMienTay",
+        "miền tây": "VP_NuMienTay",
+        "vp_numientay": "VP_NuMienTay",
+
+        "review phim": "VP_ReviewPhim",
+        "tóm tắt phim": "VP_ReviewPhim",
+        "vp_reviewphim": "VP_ReviewPhim",
+
+        # VieNeu Presets
         "hải đăng": "Hải Đăng",
         "trúc ly": "Trúc Ly",
         "thiện minh": "Thiện Minh",
@@ -97,11 +137,11 @@ class TTSEngine:
     }
 
     SUPPORTED_TAGS = [
-        {"tag": "[cười]", "description": "Tiếng cười tự nhiên trong câu"},
-        {"tag": "[thở dài]", "description": "Tiếng thở dài thể hiện tâm trạng"},
-        {"tag": "[hắng giọng]", "description": "Hắng giọng, lấy giọng nói"},
-        {"tag": "[ngạc nhiên]", "description": "Biểu cảm ngạc nhiên, bất ngờ"},
-        {"tag": "[ngập ngừng]", "description": "Khoảng lặng do dự, suy nghĩ"}
+        {"tag": "[cười]", "description": "Tiếng cười tự nhiên trong câu (VieNeu Engine)"},
+        {"tag": "[thở dài]", "description": "Tiếng thở dài thể hiện tâm trạng (VieNeu Engine)"},
+        {"tag": "[hắng giọng]", "description": "Hắng giọng, lấy giọng nói (VieNeu Engine)"},
+        {"tag": "[ngạc nhiên]", "description": "Biểu cảm ngạc nhiên, bất ngờ (VieNeu Engine)"},
+        {"tag": "[ngập ngừng]", "description": "Khoảng lặng do dự, suy nghĩ (VieNeu Engine)"}
     ]
 
     def __new__(cls):
@@ -124,16 +164,41 @@ class TTSEngine:
         self.tts = None
         self.is_loaded = False
         self.error_message = None
-        self.voices_list = self._init_voices()
+
+        # Nạp danh sách đa nguồn (VieNeu + Custom Voicepacks + Edge Neural)
+        self.voices_list = self._init_all_voices()
 
         self._load_model()
         self._initialized = True
 
-    def _init_voices(self) -> List[Dict[str, Any]]:
+    def _init_all_voices(self) -> List[Dict[str, Any]]:
         """
-        Nạp danh sách giọng đọc từ thư viện vieneu nếu có file voices_v3_turbo.json,
-        nếu không thì dùng danh sách FALLBACK_VOICES_METADATA.
+        Nạp hợp nhất danh sách giọng từ:
+        1. Edge Neural Voices (Hoài My, Nam Minh)
+        2. Custom Voicepacks (MC Thời Sự, Kể Chuyện Đêm, Nữ Huế...)
+        3. VieNeu-TTS Presets (25 giọng)
         """
+        all_voices = []
+
+        # 1. Thêm Edge Neural Voices
+        all_voices.extend(EDGE_VOICES_METADATA)
+
+        # 2. Thêm Voicepacks
+        try:
+            vp_engine = get_voicepack_engine()
+            vps = vp_engine.get_voicepacks()
+            all_voices.extend(vps)
+        except Exception as e:
+            logger.warning(f"Không thể nạp voicepacks: {e}")
+
+        # 3. Thêm VieNeu Presets
+        vieneu_voices = self._load_vieneu_presets()
+        all_voices.extend(vieneu_voices)
+
+        logger.info(f"Đã nạp tổng cộng {len(all_voices)} giọng đọc vào Multi-Engine Router.")
+        return all_voices
+
+    def _load_vieneu_presets(self) -> List[Dict[str, Any]]:
         try:
             import vieneu
             pkg_dir = os.path.dirname(vieneu.__file__)
@@ -159,11 +224,11 @@ class TTSEngine:
                                 "gender": gender,
                                 "region": region_name,
                                 "description": info.get("description", f"{gender} · {region_name}"),
-                                "style": info.get("style", "Tự nhiên")
+                                "style": info.get("style", "Tự nhiên"),
+                                "engine": "vieneu"
                             })
                         region_order = {"Miền Trung": 1, "Miền Nam": 2, "Miền Bắc": 3}
                         parsed.sort(key=lambda x: (region_order.get(x["region"], 9), x["gender"], x["name"]))
-                        logger.info(f"Đã nạp thành công {len(parsed)} giọng đọc từ {json_path}")
                         return parsed
         except Exception as e:
             logger.warning(f"Không thể đọc voices_v3_turbo.json từ vieneu: {e}")
@@ -212,62 +277,97 @@ class TTSEngine:
             "device": self.device,
             "sample_rate": self.sample_rate,
             "total_voices": len(self.voices_list),
+            "supported_engines": ["vieneu", "voicepack", "edge"],
             "error": self.error_message
         }
 
-    def resolve_voice_name(self, raw_voice: Optional[str]) -> str:
+    def resolve_voice_info(self, raw_voice: Optional[str]) -> Dict[str, Any]:
         """
-        Chuẩn hóa tên giọng dựa trên alias mapping để đảm bảo luôn khớp
-        với tên preset chính thức trong VieNeu.
+        Tìm kiếm thông tin giọng và engine xử lý từ tên voice hoặc alias.
         """
         if not raw_voice:
-            return "Hải Đăng"
+            return {"id": "Hải Đăng", "engine": "vieneu", "name": "Hải Đăng"}
 
         cleaned = raw_voice.strip()
         lower = cleaned.lower()
 
-        if lower in self.VOICE_ALIASES:
-            return self.VOICE_ALIASES[lower]
+        # Check alias map
+        target_id = self.VOICE_ALIASES.get(lower, cleaned)
 
+        # Tìm trong voices_list
         for v in self.voices_list:
-            if v["id"].lower() == lower or v["name"].lower() == lower:
-                return v["id"]
+            if v["id"].lower() == target_id.lower() or v["name"].lower() == target_id.lower() or v["id"].lower() == lower or v["name"].lower() == lower:
+                return v
 
+        # Fallback về Hải Đăng nếu không thấy
         logger.warning(f"Không tìm thấy giọng '{raw_voice}', sử dụng giọng mặc định 'Hải Đăng'")
-        return "Hải Đăng"
+        return {"id": "Hải Đăng", "engine": "vieneu", "name": "Hải Đăng"}
 
     def infer(self, text: str, voice: Optional[str] = "Hải Đăng", ref_audio_path: Optional[str] = None, denoise: bool = True) -> io.BytesIO:
         cleaned_text = text.strip()
         if not cleaned_text:
             raise ValueError("Văn bản tổng hợp không được để trống.")
 
+        # TRƯỜNG HỢP 1: Người dùng upload / ghi âm file mẫu (Custom Voice Cloning trực tiếp)
+        if ref_audio_path and os.path.exists(ref_audio_path):
+            with self.infer_lock:
+                if not self.is_ready():
+                    return self._generate_fallback_audio(cleaned_text)
+                logger.info(f"Bắt đầu Voice Cloning từ file mẫu người dùng: {ref_audio_path} (Denoise={denoise})")
+                audio_output = self.tts.infer(
+                    text=cleaned_text,
+                    ref_audio=ref_audio_path,
+                    denoise=denoise
+                )
+                return self._convert_to_wav_io(audio_output)
+
+        # TRƯỜNG HỢP 2: Sử dụng giọng có sẵn qua Multi-Engine Router
+        voice_info = self.resolve_voice_info(voice)
+        engine_type = voice_info.get("engine", "vieneu")
+        voice_id = voice_info.get("id", "Hải Đăng")
+
+        # --- A. XỬ LÝ QUA EDGE-TTS (Tốc độ cao, 0MB RAM) ---
+        if engine_type == "edge":
+            logger.info(f"Định tuyến tới Edge-TTS Engine: '{voice_id}' (Voice: {voice_info.get('name')})")
+            edge_engine = get_edge_engine()
+            return edge_engine.synthesize(text=cleaned_text, voice=voice_id)
+
+        # --- B. XỬ LÝ QUA CUSTOM VOICEPACKS (VieNeu Prompt Audio) ---
+        if engine_type == "voicepack":
+            vp_engine = get_voicepack_engine()
+            sample_path = vp_engine.get_sample_path(voice_id)
+            if sample_path and os.path.exists(sample_path):
+                logger.info(f"Định tuyến tới Voicepack: '{voice_info.get('name')}' qua mẫu: {sample_path}")
+                with self.infer_lock:
+                    if not self.is_ready():
+                        return self._generate_fallback_audio(cleaned_text)
+                    audio_output = self.tts.infer(
+                        text=cleaned_text,
+                        ref_audio=sample_path,
+                        denoise=True
+                    )
+                    return self._convert_to_wav_io(audio_output)
+            else:
+                logger.warning(f"Không tìm thấy file mẫu cho voicepack '{voice_id}', fallback về Hải Đăng")
+                voice_id = "Hải Đăng"
+
+        # --- C. XỬ LÝ QUA VIENEU PRESETS (25 giọng chuẩn) ---
         with self.infer_lock:
             if not self.is_ready():
-                logger.warning("Mô hình chưa sẵn sàng, kích hoạt fallback sóng âm...")
+                logger.warning("Mô hình VieNeu chưa sẵn sàng, kích hoạt fallback sóng âm...")
                 return self._generate_fallback_audio(cleaned_text)
 
             try:
-                if ref_audio_path and os.path.exists(ref_audio_path):
-                    logger.info(f"Bắt đầu Voice Cloning từ file mẫu: {ref_audio_path} (Denoise={denoise})")
-                    audio_output = self.tts.infer(
-                        text=cleaned_text,
-                        ref_audio=ref_audio_path,
-                        denoise=denoise
-                    )
-                else:
-                    target_voice = self.resolve_voice_name(voice)
-                    logger.info(f"Bắt đầu tổng hợp giọng chuẩn: '{target_voice}' (input: '{voice}')")
-                    audio_output = self.tts.infer(
-                        text=cleaned_text,
-                        voice=target_voice,
-                        denoise=denoise
-                    )
-
+                logger.info(f"Định tuyến tới VieNeu Engine: '{voice_id}' (Input: '{voice}')")
+                audio_output = self.tts.infer(
+                    text=cleaned_text,
+                    voice=voice_id,
+                    denoise=denoise
+                )
                 return self._convert_to_wav_io(audio_output)
-
             except Exception as e:
-                logger.error(f"Lỗi trong quá trình suy luận TTS: {str(e)}", exc_info=True)
-                raise RuntimeError(f"Lỗi suy luận TTS: {str(e)}")
+                logger.error(f"Lỗi suy luận VieNeu TTS: {str(e)}", exc_info=True)
+                raise RuntimeError(f"Lỗi suy luận VieNeu TTS: {str(e)}")
 
     def _convert_to_wav_io(self, audio_output: Any) -> io.BytesIO:
         buffer = io.BytesIO()

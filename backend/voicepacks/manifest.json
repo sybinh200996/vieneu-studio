@@ -1,0 +1,62 @@
+[
+  {
+    "id": "VP_MC_Nam",
+    "name": "MC Thời Sự Nam (Voicepack)",
+    "gender": "Nam",
+    "region": "Miền Bắc",
+    "description": "Nam · Bắc · Phát thanh truyền hình chuẩn, dõng dạc",
+    "style": "Tin tức / MC",
+    "sample_file": "mc_vtv_nam.wav",
+    "engine": "voicepack"
+  },
+  {
+    "id": "VP_MC_Nu",
+    "name": "MC Thời Sự Nữ (Voicepack)",
+    "gender": "Nữ",
+    "region": "Miền Bắc",
+    "description": "Nữ · Bắc · Sang trọng, truyền cảm, tin tức thời sự",
+    "style": "Tin tức / MC",
+    "sample_file": "mc_vtv_nu.wav",
+    "engine": "voicepack"
+  },
+  {
+    "id": "VP_KeChuyenDem",
+    "name": "Kể Chuyện Đêm (Voicepack)",
+    "gender": "Nam",
+    "region": "Miền Bắc",
+    "description": "Nam · Bắc · Trầm ấm, sâu lắng, đọc truyện đêm khuya",
+    "style": "Kể chuyện / Audio Book",
+    "sample_file": "ke_chuyen_dem.wav",
+    "engine": "voicepack"
+  },
+  {
+    "id": "VP_NuHue",
+    "name": "Nữ Huế Thơ Mộng (Voicepack)",
+    "gender": "Nữ",
+    "region": "Miền Trung",
+    "description": "Nữ · Trung (Huế) · Dịu dàng, đằm thắm, ngọt ngào",
+    "style": "Thơ mộng / Thuyết minh",
+    "sample_file": "nu_hue.wav",
+    "engine": "voicepack"
+  },
+  {
+    "id": "VP_NuMienTay",
+    "name": "Nữ Miền Tây (Voicepack)",
+    "gender": "Nữ",
+    "region": "Miền Nam",
+    "description": "Nữ · Nam (Miền Tây) · Ngọt ngào, mộc mạc, gần gũi",
+    "style": "Kể chuyện / Tâm tình",
+    "sample_file": "nu_mientay.wav",
+    "engine": "voicepack"
+  },
+  {
+    "id": "VP_ReviewPhim",
+    "name": "Review Phim Hào Hứng (Voicepack)",
+    "gender": "Nam",
+    "region": "Miền Nam",
+    "description": "Nam · Nam · Nhanh, sôi nổi, phong cách tóm tắt phim",
+    "style": "Review / TikTok",
+    "sample_file": "review_phim.wav",
+    "engine": "voicepack"
+  }
+]
