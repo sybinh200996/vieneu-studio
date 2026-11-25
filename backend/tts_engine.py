@@ -3,6 +3,7 @@ import os
 import re
 import time
 import json
+import hashlib
 import logging
 import threading
 import tempfile
@@ -15,8 +16,16 @@ from backend.voicepack_engine import get_voicepack_engine
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("TTSEngine")
 
+ALLOWED_REF_EXTENSIONS = {".wav", ".mp3", ".m4a", ".webm", ".ogg"}
+CACHE_TTL_SECONDS = 24 * 3600  # 24 giờ
+CACHE_CLEANUP_INTERVAL = 1800  # Dọn dẹp tối đa mỗi 30 phút
+
 class CPUQueueFullError(Exception):
     """Bắn ra khi số lượng request TTS trên CPU vượt quá giới hạn BoundedSemaphore (tối đa 4 request chờ)"""
+    pass
+
+class ModelNotReadyError(Exception):
+    """Bắn ra khi engine CPU (VieNeu / Voicepack) chưa sẵn sàng phục vụ"""
     pass
 
 try:
@@ -159,25 +168,32 @@ class TTSEngine:
         return cls._instance
 
     def __init__(self):
-        if getattr(self, "_initialized", False):
-            return
+        with self._init_lock:
+            if getattr(self, "_initialized", False):
+                return
 
-        self.model_name = os.getenv("VIENEU_MODEL", "v3turbo")
-        self.precision = os.getenv("VIENEU_PRECISION", "int8")
-        self.device = os.getenv("VIENEU_DEVICE", "cpu")
-        self.sample_rate = 48000
-        self.infer_lock = threading.Lock()
-        # Chốt chặn hàng đợi CPU: Tối đa 4 request chờ đồng thời trên 2 vCPU
-        self.cpu_semaphore = threading.BoundedSemaphore(4)
-        self.tts = None
-        self.is_loaded = False
-        self.error_message = None
+            self.model_name = os.getenv("VIENEU_MODEL", "v3turbo")
+            self.precision = os.getenv("VIENEU_PRECISION", "int8")
+            self.device = os.getenv("VIENEU_DEVICE", "cpu")
+            self.sample_rate = 48000
+            self.infer_lock = threading.Lock()
+            # Chốt chặn hàng đợi CPU: Tối đa 4 request chờ đồng thời trên 2 vCPU
+            self.cpu_semaphore = threading.BoundedSemaphore(4)
+            self.tts = None
+            self.is_loaded = False
+            self.error_message = None
 
-        # Nạp danh sách đa nguồn (VieNeu + Custom Voicepacks + Edge Neural)
-        self.voices_list = self._init_all_voices()
+            # Thư mục Disk Cache WAV (SSD) + khóa thời điểm dọn dẹp
+            self._cache_dir = os.path.join(tempfile.gettempdir(), "vieneu_tts_cache")
+            os.makedirs(self._cache_dir, exist_ok=True)
+            self._cache_cleanup_lock = threading.Lock()
+            self._last_cache_cleanup = 0.0
 
-        self._load_model()
-        self._initialized = True
+            # Nạp danh sách đa nguồn (VieNeu + Custom Voicepacks + Edge Neural)
+            self.voices_list = self._init_all_voices()
+
+            self._load_model()
+            self._initialized = True
 
     def _init_all_voices(self) -> List[Dict[str, Any]]:
         """
@@ -352,7 +368,17 @@ class TTSEngine:
                         words = sub.split()
                         w_chunk = ""
                         for w in words:
-                            if len(w_chunk) + len(w) + 1 <= max_chars:
+                            if len(w) > max_chars:
+                                if w_chunk:
+                                    chunks.append(w_chunk)
+                                    w_chunk = ""
+                                for k in range(0, len(w), max_chars):
+                                    part = w[k:k + max_chars]
+                                    if len(part) == max_chars:
+                                        chunks.append(part)
+                                    else:
+                                        w_chunk = part
+                            elif len(w_chunk) + len(w) + 1 <= max_chars:
                                 w_chunk = f"{w_chunk} {w}".strip()
                             else:
                                 if w_chunk:
@@ -380,13 +406,108 @@ class TTSEngine:
 
         return [c for c in chunks if c.strip()]
 
+    def _validate_ref_audio_path(self, ref_audio_path: Optional[str]) -> Optional[str]:
+        """Kiểm tra đường dẫn file mẫu an toàn: chặn path traversal, chỉ nhận file hợp lệ trong thư mục cho phép."""
+        if not ref_audio_path:
+            return None
+
+        real_path = os.path.realpath(ref_audio_path)
+        if not os.path.isfile(real_path):
+            raise ValueError("File âm thanh mẫu không tồn tại.")
+
+        ext = os.path.splitext(real_path)[1].lower()
+        if ext not in ALLOWED_REF_EXTENSIONS:
+            raise ValueError(f"Định dạng file mẫu không hợp lệ: '{ext}'")
+
+        allowed_roots = [
+            os.path.realpath(tempfile.gettempdir()),
+            os.path.realpath(os.path.join(os.path.dirname(__file__), "voicepacks")),
+        ]
+        is_allowed = False
+        for root in allowed_roots:
+            try:
+                if os.path.commonpath([root, real_path]) == root:
+                    is_allowed = True
+                    break
+            except ValueError:
+                continue
+
+        if not is_allowed:
+            logger.warning(f"Chặn truy cập file mẫu ngoài vùng cho phép: {ref_audio_path}")
+            raise ValueError("Đường dẫn file âm thanh mẫu không được phép.")
+
+        return real_path
+
+    def _get_cache_path(self, engine_type: str, voice_id: str, text: str, denoise: bool) -> str:
+        raw_key = f"{engine_type}|{voice_id}|{text}|{bool(denoise)}".encode("utf-8")
+        digest = hashlib.sha256(raw_key).hexdigest()
+        return os.path.join(self._cache_dir, f"{digest}.wav")
+
+    def _read_cache(self, cache_path: str) -> Optional[io.BytesIO]:
+        try:
+            if not os.path.isfile(cache_path):
+                return None
+            stat = os.stat(cache_path)
+            if time.time() - stat.st_mtime > CACHE_TTL_SECONDS:
+                try:
+                    os.remove(cache_path)
+                except OSError:
+                    pass
+                return None
+            if stat.st_size <= 44:
+                return None
+            with open(cache_path, "rb") as f:
+                data = f.read()
+            return io.BytesIO(data)
+        except Exception as e:
+            logger.warning(f"Lỗi đọc disk cache ({cache_path}): {e}")
+            return None
+
+    def _write_cache(self, cache_path: str, wav_buffer: io.BytesIO) -> None:
+        try:
+            data = wav_buffer.getvalue()
+            if len(data) <= 44:
+                return
+            tmp_cache = f"{cache_path}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp_cache, "wb") as f:
+                f.write(data)
+            os.replace(tmp_cache, cache_path)
+            wav_buffer.seek(0)
+            self._cleanup_old_cache()
+        except Exception as e:
+            logger.warning(f"Không thể ghi disk cache ({cache_path}): {e}")
+
+    def _cleanup_old_cache(self) -> None:
+        now = time.time()
+        if now - self._last_cache_cleanup < CACHE_CLEANUP_INTERVAL:
+            return
+        if not self._cache_cleanup_lock.acquire(blocking=False):
+            return
+        try:
+            self._last_cache_cleanup = now
+            removed = 0
+            for entry in os.scandir(self._cache_dir):
+                if entry.is_file():
+                    try:
+                        if now - entry.stat().st_mtime > CACHE_TTL_SECONDS:
+                            os.remove(entry.path)
+                            removed += 1
+                    except OSError:
+                        pass
+            if removed:
+                logger.info(f"Đã dọn {removed} file TTS cache cũ quá 24h.")
+        except Exception as e:
+            logger.warning(f"Lỗi dọn dẹp cache: {e}")
+        finally:
+            self._cache_cleanup_lock.release()
+
     def _infer_cpu_chunks(self, chunks: List[str], voice: Optional[str] = None, ref_audio: Optional[str] = None, denoise: bool = True) -> io.BytesIO:
         """
         Thực hiện suy luận tuần tự từng chunk trên CPU, nhả CPU và ghép các mảng numpy lại.
         Giúp đỉnh RAM phẳng lỳ và CPU không bị khóa cứng khi lồng tiếng văn bản dài.
         """
         if not self.is_ready():
-            return self._generate_fallback_audio(" ".join(chunks))
+            raise ModelNotReadyError(self.error_message or "Mô hình VieNeu-TTS chưa sẵn sàng trên CPU.")
 
         audio_parts = []
         pause_samples = int(self.sample_rate * 0.15)
@@ -421,25 +542,42 @@ class TTSEngine:
         elif audio_parts:
             return self._convert_to_wav_io(audio_parts[0])
         else:
-            return self._generate_fallback_audio(" ".join(chunks))
+            raise RuntimeError("Không tạo được dữ liệu âm thanh từ engine CPU.")
 
     def infer(self, text: str, voice: Optional[str] = "Hải Đăng", ref_audio_path: Optional[str] = None, denoise: bool = True) -> io.BytesIO:
         cleaned_text = text.strip()
         if not cleaned_text:
             raise ValueError("Văn bản tổng hợp không được để trống.")
 
+        valid_ref_path = self._validate_ref_audio_path(ref_audio_path)
+
         # Phân loại engine để điều hướng tối ưu tài nguyên
         voice_info = self.resolve_voice_info(voice)
         engine_type = voice_info.get("engine", "vieneu")
         voice_id = voice_info.get("id", "Hải Đăng")
 
+        # Kiểm tra Disk Cache trước (chỉ cache khi không dùng file mẫu upload riêng)
+        cache_path = None
+        if not valid_ref_path:
+            cache_path = self._get_cache_path(engine_type, voice_id, cleaned_text, denoise)
+            cached_io = self._read_cache(cache_path)
+            if cached_io is not None:
+                logger.info(f"Disk Cache HIT [{engine_type}:{voice_id}] ({len(cleaned_text)} ký tự)")
+                return cached_io
+
         # --- A. XỬ LÝ QUA EDGE-TTS (Tốc độ cao, Cloud 0MB RAM, không dùng CPU semaphore) ---
-        if engine_type == "edge" and not (ref_audio_path and os.path.exists(ref_audio_path)):
+        if engine_type == "edge" and not valid_ref_path:
             logger.info(f"Định tuyến tới Edge-TTS Engine: '{voice_id}' (Voice: {voice_info.get('name')})")
             edge_engine = get_edge_engine()
-            return edge_engine.synthesize(text=cleaned_text, voice=voice_id)
+            wav_io = edge_engine.synthesize(text=cleaned_text, voice=voice_id)
+            if cache_path:
+                self._write_cache(cache_path, wav_io)
+            return wav_io
 
         # --- B. CÁC TÁC VỤ CPU (VieNeu / Voicepack / Custom Voice Cloning) ---
+        if not self.is_ready():
+            raise ModelNotReadyError(self.error_message or "Mô hình VieNeu-TTS chưa sẵn sàng trên CPU.")
+
         # Kiểm tra chốt chặn hàng đợi CPU: Tối đa 4 request chờ đồng thời trên 2 vCPU
         if not self.cpu_semaphore.acquire(blocking=False):
             logger.warning("Từ chối request: Hàng đợi CPU đã đạt ngưỡng tối đa 4 request.")
@@ -452,19 +590,23 @@ class TTSEngine:
                 logger.info(f"Văn bản dài ({len(cleaned_text)} ký tự), tự động chia thành {len(chunks)} chunks để giữ RAM phẳng.")
 
             # TRƯỜNG HỢP 1: Người dùng upload / ghi âm file mẫu (Custom Voice Cloning trực tiếp)
-            if ref_audio_path and os.path.exists(ref_audio_path):
+            if valid_ref_path:
                 with self.infer_lock:
-                    logger.info(f"Bắt đầu Voice Cloning từ file mẫu người dùng: {ref_audio_path} (Denoise={denoise})")
-                    return self._infer_cpu_chunks(chunks, ref_audio=ref_audio_path, denoise=denoise)
+                    logger.info(f"Bắt đầu Voice Cloning từ file mẫu người dùng: {valid_ref_path} (Denoise={denoise})")
+                    return self._infer_cpu_chunks(chunks, ref_audio=valid_ref_path, denoise=denoise)
 
             # TRƯỜNG HỢP 2: Sử dụng Custom Voicepacks
             if engine_type == "voicepack":
                 vp_engine = get_voicepack_engine()
                 sample_path = vp_engine.get_sample_path(voice_id)
                 if sample_path and os.path.exists(sample_path):
-                    logger.info(f"Định tuyến tới Voicepack: '{voice_info.get('name')}' qua mẫu: {sample_path}")
+                    valid_sample = self._validate_ref_audio_path(sample_path)
+                    logger.info(f"Định tuyến tới Voicepack: '{voice_info.get('name')}' qua mẫu: {valid_sample}")
                     with self.infer_lock:
-                        return self._infer_cpu_chunks(chunks, ref_audio=sample_path, denoise=True)
+                        wav_io = self._infer_cpu_chunks(chunks, ref_audio=valid_sample, denoise=True)
+                        if cache_path:
+                            self._write_cache(cache_path, wav_io)
+                        return wav_io
                 else:
                     logger.warning(f"Không tìm thấy file mẫu cho voicepack '{voice_id}', fallback về Hải Đăng")
                     voice_id = "Hải Đăng"
@@ -472,12 +614,18 @@ class TTSEngine:
             # TRƯỜNG HỢP 3: VieNeu Presets (25 giọng chuẩn)
             with self.infer_lock:
                 logger.info(f"Định tuyến tới VieNeu Engine: '{voice_id}' (Input: '{voice}')")
-                return self._infer_cpu_chunks(chunks, voice=voice_id, denoise=denoise)
+                wav_io = self._infer_cpu_chunks(chunks, voice=voice_id, denoise=denoise)
+                if cache_path:
+                    self._write_cache(cache_path, wav_io)
+                return wav_io
 
         finally:
             self.cpu_semaphore.release()
 
     def _convert_to_wav_io(self, audio_output: Any) -> io.BytesIO:
+        if sf is None:
+            raise RuntimeError(self.error_message or "Thiếu thư viện 'soundfile' để xuất âm thanh WAV.")
+
         buffer = io.BytesIO()
 
         if np is not None and isinstance(audio_output, np.ndarray):
@@ -491,10 +639,11 @@ class TTSEngine:
             buffer.seek(0)
             return buffer
 
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-            tmp_path = tmp_file.name
-
+        tmp_path = None
         try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+
             if hasattr(self.tts, "save"):
                 self.tts.save(audio_output, tmp_path)
             else:
@@ -505,7 +654,7 @@ class TTSEngine:
             buffer.seek(0)
             return buffer
         finally:
-            if os.path.exists(tmp_path):
+            if tmp_path and os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
                 except Exception:

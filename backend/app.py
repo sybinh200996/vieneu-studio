@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from starlette.concurrency import run_in_threadpool
-from backend.tts_engine import get_tts_engine, TTSEngine, CPUQueueFullError
+from backend.tts_engine import get_tts_engine, TTSEngine, CPUQueueFullError, ModelNotReadyError
 from backend.auth import (
     verify_admin_login,
     verify_admin_token,
@@ -164,6 +164,17 @@ async def synthesize_speech(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(e),
             headers={"Retry-After": "2"}
+        )
+    except ModelNotReadyError as e:
+        logger.error(f"Mô hình TTS chưa sẵn sàng (503 Service Unavailable): {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e)
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
         )
     except HTTPException:
         raise
